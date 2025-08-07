@@ -8,7 +8,18 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 const FOOTBALL_DATA_KEY = process.env.FOOTBALL_DATA_KEY;
 
-// Funzione helper per formattare data in YYYY-MM-DD (MIGLIORATA)
+// CONTATORE RICHIESTE per rispettare i limiti API
+let requestCount = 0;
+const REQUEST_LIMIT = 5; // Limite molto sicuro per piano gratuito
+const RESET_INTERVAL = 60000; // 1 minuto
+
+// Reset contatore ogni minuto
+setInterval(() => {
+  console.log(`🔄 Reset contatore richieste. Precedente: ${requestCount}`);
+  requestCount = 0;
+}, RESET_INTERVAL);
+
+// Funzione helper per formattare data in YYYY-MM-DD
 function formatDate(date) {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -16,12 +27,37 @@ function formatDate(date) {
   return `${year}-${month}-${day}`;
 }
 
-// FUNZIONE MIGLIORATA: Partite per data con gestione robusta
+// DELAY tra richieste per rispettare rate limiting
+async function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ID CAMPIONATI UFFICIALI Football-Data.org (aggiornati per 2025)
+const COMPETITION_IDS = {
+  'Serie A': 2019,
+  'Premier League': 2021,
+  'La Liga': 2014,
+  'Bundesliga': 2002,
+  'Ligue 1': 2015,
+  'Champions League': 2001,
+  'Europa League': 2018,
+  'Primeira Liga': 2017,
+  'Eredivisie': 2003,
+  'Championship': 2016,
+  'Copa Libertadores': 2152,
+  'Brasileirao': 2013
+};
+
+// FUNZIONE CON RATE LIMITING e debug dettagliato
 async function getMatchesByDate(targetDate = null) {
+  if (requestCount >= REQUEST_LIMIT) {
+    console.log(`⚠️ Limite richieste raggiunto (${requestCount}/${REQUEST_LIMIT}). Ritorno risultati limitati.`);
+    return [];
+  }
+
   let dateString;
   
   if (targetDate) {
-    // Valida il formato della data ricevuta
     if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
       console.error(`❌ Formato data non valido: ${targetDate}`);
       return [];
@@ -29,44 +65,144 @@ async function getMatchesByDate(targetDate = null) {
     dateString = targetDate;
     console.log(`📅 Utente ha selezionato: ${dateString}`);
   } else {
-    // Usa oggi
     const today = new Date();
     dateString = formatDate(today);
     console.log(`📅 Nessuna data specificata, uso oggi: ${dateString}`);
   }
   
   try {
+    // Incrementa contatore PRIMA della richiesta
+    requestCount++;
+    
     const apiUrl = `https://api.football-data.org/v4/matches?dateFrom=${dateString}&dateTo=${dateString}`;
-    console.log(`🔗 Chiamata API: ${apiUrl}`);
+    console.log(`🔗 Chiamata API #${requestCount}: ${apiUrl}`);
     
     const response = await axios.get(apiUrl, {
-      headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY },
-      timeout: 10000 // 10 secondi timeout
+      headers: { 
+        'X-Auth-Token': FOOTBALL_DATA_KEY,
+        'User-Agent': 'PronosticiAI/1.0'
+      },
+      timeout: 20000
     });
     
     console.log(`📊 Risposta API ricevuta. Status: ${response.status}`);
+    console.log(`📊 Headers response:`, response.headers);
     
     const matches = response.data.matches || [];
-    console.log(`✅ Partite trovate per ${dateString}: ${matches.length}`);
+    console.log(`✅ Partite TOTALI trovate per ${dateString}: ${matches.length}`);
+    
+    // DEBUG DETTAGLIATO: Mostra tutti i campionati disponibili
+    if (matches.length > 0) {
+      const competitionsFound = {};
+      matches.forEach(match => {
+        const compName = match.competition?.name || 'Sconosciuto';
+        const compId = match.competition?.id || 'N/A';
+        if (!competitionsFound[compName]) {
+          competitionsFound[compName] = { id: compId, count: 0 };
+        }
+        competitionsFound[compName].count++;
+      });
+      
+      console.log(`🏆 CAMPIONATI DISPONIBILI per ${dateString}:`);
+      Object.entries(competitionsFound).forEach(([name, data]) => {
+        console.log(`   - ${name} (ID: ${data.id}): ${data.count} partite`);
+      });
+      
+      // Check specifico per campionati europei
+      const europeanComps = ['Serie A', 'Premier League', 'La Liga', 'Bundesliga', 'Ligue 1'];
+      const foundEuropean = europeanComps.filter(comp => 
+        Object.keys(competitionsFound).some(found => 
+          found.toLowerCase().includes(comp.toLowerCase()) || 
+          comp.toLowerCase().includes(found.toLowerCase())
+        )
+      );
+      
+      if (foundEuropean.length > 0) {
+        console.log(`🇪🇺 CAMPIONATI EUROPEI TROVATI: ${foundEuropean.join(', ')}`);
+      } else {
+        console.log(`⚠️ NESSUN CAMPIONATO EUROPEO MAGGIORE trovato per ${dateString}`);
+        console.log(`💡 Probabilmente sono in pausa estiva o non ancora iniziati`);
+      }
+    } else {
+      console.log(`❌ NESSUNA PARTITA trovata per ${dateString}`);
+      
+      // Se non ci sono partite, proviamo a controllare la stagione 2024-25
+      console.log(`🔍 Controllo se ci sono informazioni sulla stagione...`);
+      
+      // Prova con range più ampio per vedere se ci sono dati
+      if (requestCount < REQUEST_LIMIT) {
+        await delay(3000);
+        requestCount++;
+        
+        const rangeStart = dateString;
+        const rangeEnd = new Date(dateString);
+        rangeEnd.setDate(rangeEnd.getDate() + 7); // Prossimi 7 giorni
+        const rangeEndString = formatDate(rangeEnd);
+        
+        const rangeUrl = `https://api.football-data.org/v4/matches?dateFrom=${rangeStart}&dateTo=${rangeEndString}`;
+        console.log(`🔗 Provo con range 7 giorni: ${rangeUrl}`);
+        
+        try {
+          const rangeResponse = await axios.get(rangeUrl, {
+            headers: { 
+              'X-Auth-Token': FOOTBALL_DATA_KEY,
+              'User-Agent': 'PronosticiAI/1.0'
+            },
+            timeout: 20000
+          });
+          
+          const rangeMatches = rangeResponse.data.matches || [];
+          console.log(`📊 Partite trovate nei prossimi 7 giorni: ${rangeMatches.length}`);
+          
+          if (rangeMatches.length > 0) {
+            const rangeComps = [...new Set(rangeMatches.map(m => m.competition?.name))];
+            console.log(`🏆 Campionati nei prossimi 7 giorni: ${rangeComps.join(', ')}`);
+            
+            // Ritorna solo le partite del giorno specifico richiesto
+            const dayMatches = rangeMatches.filter(match => {
+              const matchDate = new Date(match.utcDate).toISOString().slice(0, 10);
+              return matchDate === dateString;
+            });
+            
+            console.log(`✅ Partite filtrate per ${dateString}: ${dayMatches.length}`);
+            return dayMatches;
+          }
+        } catch (rangeError) {
+          console.error(`❌ Errore nella ricerca range:`, rangeError.message);
+        }
+      }
+    }
     
     // Se non ci sono partite e stiamo cercando "oggi", prova domani
-    if (matches.length === 0 && !targetDate) {
+    if (matches.length === 0 && !targetDate && requestCount < REQUEST_LIMIT) {
       console.log(`🔄 Oggi vuoto, provo con domani...`);
+      
+      await delay(5000); // 5 secondi di pausa
       
       const tomorrow = new Date();
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowString = formatDate(tomorrow);
       
+      requestCount++;
+      
       const tomorrowUrl = `https://api.football-data.org/v4/matches?dateFrom=${tomorrowString}&dateTo=${tomorrowString}`;
-      console.log(`🔗 Chiamata API domani: ${tomorrowUrl}`);
+      console.log(`🔗 Chiamata API #${requestCount} domani: ${tomorrowUrl}`);
       
       const tomorrowResponse = await axios.get(tomorrowUrl, {
-        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY },
-        timeout: 10000
+        headers: { 
+          'X-Auth-Token': FOOTBALL_DATA_KEY,
+          'User-Agent': 'PronosticiAI/1.0'
+        },
+        timeout: 20000
       });
       
       const tomorrowMatches = tomorrowResponse.data.matches || [];
       console.log(`✅ Partite trovate per domani (${tomorrowString}): ${tomorrowMatches.length}`);
+      
+      if (tomorrowMatches.length > 0) {
+        const tomorrowCompetitions = [...new Set(tomorrowMatches.map(m => m.competition?.name))];
+        console.log(`🏆 Campionati domani: ${tomorrowCompetitions.join(', ')}`);
+      }
       
       return tomorrowMatches;
     }
@@ -76,14 +212,27 @@ async function getMatchesByDate(targetDate = null) {
   } catch (error) {
     console.error(`❌ Errore chiamata API per ${dateString}:`);
     console.error(`   Status: ${error.response?.status}`);
+    console.error(`   Status Text: ${error.response?.statusText}`);
+    console.error(`   Headers: ${JSON.stringify(error.response?.headers)}`);
     console.error(`   Data: ${JSON.stringify(error.response?.data)}`);
     console.error(`   Message: ${error.message}`);
+    
+    // Check specifico per errori comuni
+    if (error.response?.status === 429) {
+      console.error(`🚫 RATE LIMIT EXCEEDED - Troppe richieste`);
+    } else if (error.response?.status === 403) {
+      console.error(`🚫 FORBIDDEN - Problema con API Key o permessi`);
+    } else if (error.response?.status === 404) {
+      console.error(`🚫 NOT FOUND - Endpoint non trovato`);
+    }
+    
     return [];
   }
 }
 
-// [Resto del codice rimane identico: database squadre, algoritmo AI, etc...]
+// DATABASE SQUADRE ESTESO (aggiunto squadre serie A 2025)
 const teamStrengthDatabase = {
+  // Premier League
   'Manchester City': { strength: 9.5, form: 9.0, attack: 8.8, defense: 8.5 },
   'Arsenal': { strength: 8.5, form: 8.2, attack: 8.0, defense: 7.8 },
   'Liverpool': { strength: 9.0, form: 8.5, attack: 8.7, defense: 8.0 },
@@ -91,13 +240,53 @@ const teamStrengthDatabase = {
   'Manchester United': { strength: 7.5, form: 6.8, attack: 7.0, defense: 7.0 },
   'Tottenham': { strength: 7.2, form: 7.0, attack: 7.5, defense: 6.5 },
   'Newcastle United': { strength: 7.0, form: 7.5, attack: 6.8, defense: 7.2 },
+  'Aston Villa': { strength: 6.8, form: 7.0, attack: 6.5, defense: 6.8 },
+  'West Ham United': { strength: 6.2, form: 6.0, attack: 6.0, defense: 6.2 },
+  'Brighton & Hove Albion': { strength: 6.5, form: 6.8, attack: 6.2, defense: 6.5 },
+  
+  // La Liga
   'Real Madrid': { strength: 9.8, form: 9.5, attack: 9.2, defense: 8.5 },
   'FC Barcelona': { strength: 8.8, form: 8.0, attack: 8.5, defense: 7.8 },
+  'Atlético Madrid': { strength: 8.0, form: 7.5, attack: 7.0, defense: 8.5 },
+  'Real Sociedad': { strength: 7.0, form: 7.2, attack: 6.8, defense: 7.0 },
+  'Real Betis': { strength: 6.8, form: 6.5, attack: 6.5, defense: 6.8 },
+  'Villarreal': { strength: 7.2, form: 7.0, attack: 7.0, defense: 7.0 },
+  'Athletic Bilbao': { strength: 6.9, form: 7.1, attack: 6.6, defense: 7.2 },
+  
+  // Serie A (aggiornato per 2025)
   'Juventus': { strength: 8.0, form: 7.5, attack: 7.2, defense: 8.2 },
   'AC Milan': { strength: 8.2, form: 8.0, attack: 7.8, defense: 7.5 },
   'Inter Milan': { strength: 8.5, form: 8.2, attack: 8.0, defense: 8.0 },
+  'SSC Napoli': { strength: 8.0, form: 7.2, attack: 7.5, defense: 7.8 },
+  'AS Roma': { strength: 7.2, form: 6.8, attack: 6.8, defense: 7.0 },
+  'SS Lazio': { strength: 7.0, form: 7.0, attack: 7.2, defense: 6.8 },
+  'Atalanta': { strength: 7.5, form: 7.8, attack: 8.2, defense: 6.8 },
+  'ACF Fiorentina': { strength: 6.7, form: 6.9, attack: 6.5, defense: 6.9 },
+  'Torino FC': { strength: 6.3, form: 6.5, attack: 6.0, defense: 6.6 },
+  'Bologna FC': { strength: 6.5, form: 6.8, attack: 6.3, defense: 6.7 },
+  
+  // Bundesliga
   'FC Bayern München': { strength: 9.2, form: 8.8, attack: 9.0, defense: 8.0 },
+  'Borussia Dortmund': { strength: 8.0, form: 7.5, attack: 8.2, defense: 7.0 },
+  'RB Leipzig': { strength: 7.5, form: 7.8, attack: 7.2, defense: 7.8 },
+  'Bayer Leverkusen': { strength: 7.8, form: 8.5, attack: 8.0, defense: 7.2 },
+  'Eintracht Frankfurt': { strength: 6.8, form: 7.0, attack: 7.0, defense: 6.6 },
+  
+  // Ligue 1
   'Paris Saint-Germain': { strength: 9.0, form: 8.5, attack: 9.2, defense: 7.5 },
+  'AS Monaco': { strength: 7.0, form: 7.2, attack: 7.5, defense: 6.8 },
+  'Olympique de Marseille': { strength: 6.8, form: 6.5, attack: 6.5, defense: 6.8 },
+  'Olympique Lyonnais': { strength: 6.5, form: 6.3, attack: 6.2, defense: 6.8 },
+  
+  // Campionati attivi ad agosto (Brasile, Portogallo, MLS, ecc.)
+  'Flamengo': { strength: 7.8, form: 8.2, attack: 8.0, defense: 7.5 },
+  'Palmeiras': { strength: 7.5, form: 7.8, attack: 7.2, defense: 7.8 },
+  'São Paulo': { strength: 7.2, form: 7.0, attack: 6.8, defense: 7.4 },
+  'FC Porto': { strength: 7.6, form: 7.5, attack: 7.3, defense: 7.8 },
+  'Sporting CP': { strength: 7.4, form: 7.2, attack: 7.0, defense: 7.5 },
+  'SL Benfica': { strength: 7.8, form: 7.6, attack: 7.5, defense: 7.3 },
+  'LA Galaxy': { strength: 6.5, form: 6.8, attack: 6.7, defense: 6.3 },
+  'Inter Miami': { strength: 6.8, form: 7.2, attack: 7.0, defense: 6.6 }
 };
 
 function getTeamData(teamName) {
@@ -123,11 +312,13 @@ function getTeamData(teamName) {
       attack: Math.round((5.0 + Math.random() * 4.0) * 10) / 10,
       defense: Math.round((5.0 + Math.random() * 4.0) * 10) / 10
     };
+    console.log(`⚡ Generati dati casuali per ${teamName}:`, teamData);
   }
   
   return teamData;
 }
 
+// Algoritmo AI con varietà garantita (identico a prima)
 function generaPronosticoVariegato(match, matchIndex) {
   const homeTeam = match.homeTeam.name;
   const awayTeam = match.awayTeam.name;
@@ -239,7 +430,109 @@ function generaPronosticoVariegato(match, matchIndex) {
   };
 }
 
-// ENDPOINT PRINCIPALE CON DEBUG MIGLIORATO
+// ENDPOINT con informazioni di debug dettagliate
 app.get('/api/matches', async (req, res) => {
   if (!FOOTBALL_DATA_KEY) {
-    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY
+    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY" });
+  }
+
+  try {
+    console.log(`\n🚀 === NUOVA RICHIESTA ===`);
+    console.log(`⏰ Timestamp: ${new Date().toISOString()}`);
+    console.log(`📊 Stato rate limiting: ${requestCount}/${REQUEST_LIMIT} richieste utilizzate`);
+    console.log(`📅 Query params:`, req.query);
+    
+    const selectedDate = req.query.date;
+    const allMatches = await getMatchesByDate(selectedDate);
+
+    console.log(`📊 Partite ricevute dall'API: ${allMatches.length}`);
+
+    const matchesConPronostici = allMatches.map((match, index) => ({
+      ...match,
+      aiPronostico: generaPronosticoVariegato(match, index)
+    }));
+
+    console.log(`✅ Invio ${matchesConPronostici.length} partite con pronostici`);
+    console.log(`📊 Rate limiting finale: ${requestCount}/${REQUEST_LIMIT} richieste utilizzate`);
+    console.log(`🏁 === FINE RICHIESTA ===\n`);
+    
+    res.json(matchesConPronostici);
+
+  } catch (error) {
+    console.error("❌ Errore generale:", error.message);
+    res.status(500).json({ error: 'Errore nel recupero delle partite' });
+  }
+});
+
+// Endpoint per controllare lo stato delle richieste API
+app.get('/api/status', (req, res) => {
+  res.json({
+    requestCount: requestCount,
+    requestLimit: REQUEST_LIMIT,
+    remainingRequests: Math.max(0, REQUEST_LIMIT - requestCount),
+    resetTime: '60 secondi',
+    supportedCompetitions: Object.keys(COMPETITION_IDS),
+    lastRequest: new Date().toISOString()
+  });
+});
+
+// Endpoint per debug campionati specifici
+app.get('/api/competitions', async (req, res) => {
+  if (!FOOTBALL_DATA_KEY) {
+    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY" });
+  }
+
+  try {
+    console.log(`🔍 Richiesta informazioni campionati`);
+    
+    if (requestCount >= REQUEST_LIMIT) {
+      return res.json({ error: 'Rate limit raggiunto', requestCount, requestLimit: REQUEST_LIMIT });
+    }
+    
+    requestCount++;
+    
+    const response = await axios.get('https://api.football-data.org/v4/competitions', {
+      headers: { 
+        'X-Auth-Token': FOOTBALL_DATA_KEY,
+        'User-Agent': 'PronosticiAI/1.0'
+      },
+      timeout: 20000
+    });
+    
+    const competitions = response.data.competitions || [];
+    console.log(`📊 Campionati disponibili nell'API: ${competitions.length}`);
+    
+    const competitionsSummary = competitions.map(comp => ({
+      id: comp.id,
+      name: comp.name,
+      code: comp.code,
+      area: comp.area?.name,
+      currentSeason: comp.currentSeason?.startDate ? {
+        start: comp.currentSeason.startDate,
+        end: comp.currentSeason.endDate,
+        current: comp.currentSeason.currentMatchday
+      } : null
+    }));
+    
+    res.json({
+      total: competitions.length,
+      competitions: competitionsSummary,
+      requestCount,
+      requestLimit: REQUEST_LIMIT
+    });
+    
+  } catch (error) {
+    console.error(`❌ Errore recupero campionati:`, error.message);
+    res.status(500).json({ error: 'Errore nel recupero dei campionati' });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`📅 Server AI CON DEBUG COMPLETO in ascolto sulla porta ${PORT}`);
+  console.log(`⚠️  Limite sicuro: ${REQUEST_LIMIT} richieste/minuto`);
+  console.log(`🔍 Debug dettagliato per trovare problema Serie A`);
+  console.log(`🌐 Endpoints disponibili:`);
+  console.log(`   - GET /api/matches?date=YYYY-MM-DD`);
+  console.log(`   - GET /api/status`);
+  console.log(`   - GET /api/competitions`);
+});
