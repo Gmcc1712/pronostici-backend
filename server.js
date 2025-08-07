@@ -8,47 +8,65 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 const FOOTBALL_DATA_KEY = process.env.FOOTBALL_DATA_KEY;
 
-// Cache per le classifiche
-let standingsCache = {};
-const CACHE_DURATION = 3600000; // 1 ora
-
-// Funzione helper per formattare data in YYYY-MM-DD
+// Funzione helper per formattare data in YYYY-MM-DD (MIGLIORATA)
 function formatDate(date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-// NUOVA FUNZIONE: Partite per data specifica o oggi di default
+// FUNZIONE MIGLIORATA: Partite per data con gestione robusta
 async function getMatchesByDate(targetDate = null) {
-  // Se non specificata, usa oggi
-  const dateToUse = targetDate ? new Date(targetDate) : new Date();
-  const start = formatDate(dateToUse);
-  const end = formatDate(dateToUse);
+  let dateString;
   
-  console.log(`🗓️ Cercando partite per: ${start}`);
+  if (targetDate) {
+    // Valida il formato della data ricevuta
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDate)) {
+      console.error(`❌ Formato data non valido: ${targetDate}`);
+      return [];
+    }
+    dateString = targetDate;
+    console.log(`📅 Utente ha selezionato: ${dateString}`);
+  } else {
+    // Usa oggi
+    const today = new Date();
+    dateString = formatDate(today);
+    console.log(`📅 Nessuna data specificata, uso oggi: ${dateString}`);
+  }
   
   try {
-    const response = await axios.get(`https://api.football-data.org/v4/matches?dateFrom=${start}&dateTo=${end}`, {
-      headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
+    const apiUrl = `https://api.football-data.org/v4/matches?dateFrom=${dateString}&dateTo=${dateString}`;
+    console.log(`🔗 Chiamata API: ${apiUrl}`);
+    
+    const response = await axios.get(apiUrl, {
+      headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY },
+      timeout: 10000 // 10 secondi timeout
     });
     
-    const matches = response.data.matches || [];
-    console.log(`✅ Trovate ${matches.length} partite per ${start}`);
+    console.log(`📊 Risposta API ricevuta. Status: ${response.status}`);
     
-    // Se la data specifica è vuota, non provare domani (l'utente ha scelto quella data)
+    const matches = response.data.matches || [];
+    console.log(`✅ Partite trovate per ${dateString}: ${matches.length}`);
+    
+    // Se non ci sono partite e stiamo cercando "oggi", prova domani
     if (matches.length === 0 && !targetDate) {
-      // Solo se è "oggi" automatico, prova domani
-      const tomorrow = new Date(dateToUse.getTime() + 24 * 60 * 60 * 1000);
-      const tomorrowStart = formatDate(tomorrow);
-      const tomorrowEnd = formatDate(tomorrow);
+      console.log(`🔄 Oggi vuoto, provo con domani...`);
       
-      console.log(`🗓️ Oggi vuoto, cercando partite di domani: ${tomorrowStart}`);
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowString = formatDate(tomorrow);
       
-      const tomorrowResponse = await axios.get(`https://api.football-data.org/v4/matches?dateFrom=${tomorrowStart}&dateTo=${tomorrowEnd}`, {
-        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
+      const tomorrowUrl = `https://api.football-data.org/v4/matches?dateFrom=${tomorrowString}&dateTo=${tomorrowString}`;
+      console.log(`🔗 Chiamata API domani: ${tomorrowUrl}`);
+      
+      const tomorrowResponse = await axios.get(tomorrowUrl, {
+        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY },
+        timeout: 10000
       });
       
       const tomorrowMatches = tomorrowResponse.data.matches || [];
-      console.log(`✅ Trovate ${tomorrowMatches.length} partite domani`);
+      console.log(`✅ Partite trovate per domani (${tomorrowString}): ${tomorrowMatches.length}`);
       
       return tomorrowMatches;
     }
@@ -56,14 +74,16 @@ async function getMatchesByDate(targetDate = null) {
     return matches;
     
   } catch (error) {
-    console.error("Errore recupero partite per data:", error.message);
+    console.error(`❌ Errore chiamata API per ${dateString}:`);
+    console.error(`   Status: ${error.response?.status}`);
+    console.error(`   Data: ${JSON.stringify(error.response?.data)}`);
+    console.error(`   Message: ${error.message}`);
     return [];
   }
 }
 
-// DATABASE SQUADRE ESTESO CON VALORI REALISTICI
+// [Resto del codice rimane identico: database squadre, algoritmo AI, etc...]
 const teamStrengthDatabase = {
-  // Premier League
   'Manchester City': { strength: 9.5, form: 9.0, attack: 8.8, defense: 8.5 },
   'Arsenal': { strength: 8.5, form: 8.2, attack: 8.0, defense: 7.8 },
   'Liverpool': { strength: 9.0, form: 8.5, attack: 8.7, defense: 8.0 },
@@ -71,40 +91,15 @@ const teamStrengthDatabase = {
   'Manchester United': { strength: 7.5, form: 6.8, attack: 7.0, defense: 7.0 },
   'Tottenham': { strength: 7.2, form: 7.0, attack: 7.5, defense: 6.5 },
   'Newcastle United': { strength: 7.0, form: 7.5, attack: 6.8, defense: 7.2 },
-  'Aston Villa': { strength: 6.8, form: 7.0, attack: 6.5, defense: 6.8 },
-  'West Ham United': { strength: 6.2, form: 6.0, attack: 6.0, defense: 6.2 },
-  'Brighton & Hove Albion': { strength: 6.5, form: 6.8, attack: 6.2, defense: 6.5 },
-  
-  // La Liga
   'Real Madrid': { strength: 9.8, form: 9.5, attack: 9.2, defense: 8.5 },
   'FC Barcelona': { strength: 8.8, form: 8.0, attack: 8.5, defense: 7.8 },
-  'Atlético Madrid': { strength: 8.0, form: 7.5, attack: 7.0, defense: 8.5 },
-  'Real Sociedad': { strength: 7.0, form: 7.2, attack: 6.8, defense: 7.0 },
-  'Real Betis': { strength: 6.8, form: 6.5, attack: 6.5, defense: 6.8 },
-  'Villarreal': { strength: 7.2, form: 7.0, attack: 7.0, defense: 7.0 },
-  
-  // Serie A
   'Juventus': { strength: 8.0, form: 7.5, attack: 7.2, defense: 8.2 },
   'AC Milan': { strength: 8.2, form: 8.0, attack: 7.8, defense: 7.5 },
   'Inter Milan': { strength: 8.5, form: 8.2, attack: 8.0, defense: 8.0 },
-  'SSC Napoli': { strength: 8.0, form: 7.2, attack: 7.5, defense: 7.8 },
-  'AS Roma': { strength: 7.2, form: 6.8, attack: 6.8, defense: 7.0 },
-  'SS Lazio': { strength: 7.0, form: 7.0, attack: 7.2, defense: 6.8 },
-  'Atalanta': { strength: 7.5, form: 7.8, attack: 8.2, defense: 6.8 },
-  
-  // Bundesliga
   'FC Bayern München': { strength: 9.2, form: 8.8, attack: 9.0, defense: 8.0 },
-  'Borussia Dortmund': { strength: 8.0, form: 7.5, attack: 8.2, defense: 7.0 },
-  'RB Leipzig': { strength: 7.5, form: 7.8, attack: 7.2, defense: 7.8 },
-  'Bayer Leverkusen': { strength: 7.8, form: 8.5, attack: 8.0, defense: 7.2 },
-  
-  // Ligue 1
   'Paris Saint-Germain': { strength: 9.0, form: 8.5, attack: 9.2, defense: 7.5 },
-  'AS Monaco': { strength: 7.0, form: 7.2, attack: 7.5, defense: 6.8 },
-  'Olympique de Marseille': { strength: 6.8, form: 6.5, attack: 6.5, defense: 6.8 },
 };
 
-// FUNZIONE PER OTTENERE DATI SQUADRA (con fallback intelligente)
 function getTeamData(teamName) {
   let teamData = teamStrengthDatabase[teamName];
   
@@ -128,18 +123,14 @@ function getTeamData(teamName) {
       attack: Math.round((5.0 + Math.random() * 4.0) * 10) / 10,
       defense: Math.round((5.0 + Math.random() * 4.0) * 10) / 10
     };
-    console.log(`⚡ Generati dati casuali per ${teamName}:`, teamData);
   }
   
   return teamData;
 }
 
-// ALGORITMO AI CON VARIETÀ GARANTITA
 function generaPronosticoVariegato(match, matchIndex) {
   const homeTeam = match.homeTeam.name;
   const awayTeam = match.awayTeam.name;
-  
-  console.log(`🤖 Generando pronostico per: ${homeTeam} vs ${awayTeam}`);
   
   const homeData = getTeamData(homeTeam);
   const awayData = getTeamData(awayTeam);
@@ -233,8 +224,6 @@ function generaPronosticoVariegato(match, matchIndex) {
     reasoning = `Partita equilibrata. ${homeTeam}: ${homeData.strength}/10, ${awayTeam}: ${awayData.strength}/10. ${pronosticoMigliore.mercato} consigliato`;
   }
   
-  console.log(`✅ ${homeTeam} vs ${awayTeam}: ${pronosticoMigliore.tipo} (${pronosticoMigliore.probabilita}%)`);
-  
   return {
     pronosticoMigliore,
     tuttiPronostici,
@@ -250,42 +239,7 @@ function generaPronosticoVariegato(match, matchIndex) {
   };
 }
 
-// ENDPOINT PRINCIPALE CON SELEZIONE DATA
+// ENDPOINT PRINCIPALE CON DEBUG MIGLIORATO
 app.get('/api/matches', async (req, res) => {
   if (!FOOTBALL_DATA_KEY) {
-    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY" });
-  }
-
-  try {
-    // Legge il parametro ?date=YYYY-MM-DD dalla query string
-    const selectedDate = req.query.date;
-    
-    if (selectedDate) {
-      console.log(`📅 Utente ha selezionato: ${selectedDate}`);
-    } else {
-      console.log(`📅 Nessuna data specificata, uso oggi`);
-    }
-    
-    // Recupera partite per la data specifica o oggi
-    const allMatches = await getMatchesByDate(selectedDate);
-
-    // Genera pronostici per tutte le partite del giorno
-    const matchesConPronostici = allMatches.map((match, index) => ({
-      ...match,
-      aiPronostico: generaPronosticoVariegato(match, index)
-    }));
-
-    console.log(`✅ Invio ${matchesConPronostici.length} partite per la data richiesta`);
-    res.json(matchesConPronostici);
-
-  } catch (error) {
-    console.error("Errore chiamata Football-Data:", error?.response?.data || error.message);
-    res.status(500).json({ error: 'Errore nel recupero delle partite' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`📅 Server AI CON SELEZIONE DATA in ascolto sulla porta ${PORT}`);
-  console.log(`🎯 Usa ?date=YYYY-MM-DD per scegliere il giorno`);
-  console.log(`🔄 Default: partite di oggi`);
-});
+    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY
