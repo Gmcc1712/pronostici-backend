@@ -17,7 +17,7 @@ function formatDate(date) {
 function getCurrentMonthRange() {
   const now = new Date();
   const year = now.getFullYear();
-  const month = now.getMonth() + 1; // 1-12
+  const month = now.getMonth() + 1;
 
   const pad = n => n.toString().padStart(2, '0');
   const start = `${year}-${pad(month)}-01`;
@@ -43,12 +43,66 @@ function splitDateRangeIntoChunks(startDateStr, endDateStr, maxChunkDays = 10) {
       to: formatDate(currentEnd),
     });
 
-    // Avanza al giorno dopo currentEnd
     currentStart = new Date(currentEnd);
     currentStart.setDate(currentStart.getDate() + 1);
   }
 
   return chunks;
+}
+
+// FUNZIONE IA PER GENERARE PRONOSTICI INTELLIGENTI
+function generaPronosticoIntelligente(match) {
+  const homeTeam = match.homeTeam.name;
+  const awayTeam = match.awayTeam.name;
+  
+  // Squadre forti (logic semplificata - puoi espandere con dati reali)
+  const squadreForti = [
+    'Manchester City', 'Arsenal', 'Liverpool', 'Chelsea', 'Manchester United', 'Tottenham',
+    'Real Madrid', 'Barcelona', 'Atlético Madrid', 'Athletic Club',
+    'Bayern Munich', 'Borussia Dortmund', 'RB Leipzig',
+    'Paris Saint-Germain', 'AS Monaco', 'Olympique Lyonnais',
+    'Juventus', 'AC Milan', 'Inter', 'Napoli', 'AS Roma', 'Lazio',
+    'Ajax', 'PSV', 'Feyenoord'
+  ];
+
+  const homeStrong = squadreForti.includes(homeTeam);
+  const awayStrong = squadreForti.includes(awayTeam);
+  
+  let pronostico = 'X'; // Default pareggio
+  let confidenza = 50;
+  let reasoning = '';
+
+  // Logica di decisione
+  if (homeStrong && !awayStrong) {
+    pronostico = '1';
+    confidenza = 75;
+    reasoning = `${homeTeam} è favorita in casa contro ${awayTeam}`;
+  } else if (!homeStrong && awayStrong) {
+    pronostico = '2'; 
+    confidenza = 70;
+    reasoning = `${awayTeam} ha maggiore qualità tecnica`;
+  } else if (homeStrong && awayStrong) {
+    // Vantaggio casa tra due squadre forti
+    pronostico = Math.random() > 0.4 ? '1' : 'X';
+    confidenza = 60;
+    reasoning = `Scontro equilibrato, leggero vantaggio casa`;
+  } else {
+    // Due squadre non top: più imprevedibile
+    const random = Math.random();
+    if (random > 0.6) pronostico = '1';
+    else if (random > 0.3) pronostico = 'X';
+    else pronostico = '2';
+    confidenza = 55;
+    reasoning = `Partita equilibrata, risultato incerto`;
+  }
+
+  return {
+    pronostico,
+    confidenza,
+    reasoning,
+    homeTeam,
+    awayTeam
+  };
 }
 
 app.get('/api/matches', async (req, res) => {
@@ -60,7 +114,6 @@ app.get('/api/matches', async (req, res) => {
   const dateRanges = splitDateRangeIntoChunks(start, end, 10);
 
   try {
-    // Effettua richieste per ogni chunk di 10 giorni e raccoglie i risultati
     const allMatches = [];
 
     for (const range of dateRanges) {
@@ -69,13 +122,18 @@ app.get('/api/matches', async (req, res) => {
         headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
       });
 
-      // Se ci sono partite, le aggiunge all'array totale
       if (Array.isArray(response.data.matches)) {
         allMatches.push(...response.data.matches);
       }
     }
 
-    res.json(allMatches);
+    // GENERA PRONOSTICI AUTOMATICI PER OGNI PARTITA
+    const matchesConPronostici = allMatches.map(match => ({
+      ...match,
+      aiPronostico: generaPronosticoIntelligente(match)
+    }));
+
+    res.json(matchesConPronostici);
 
   } catch (error) {
     console.error("Errore chiamata Football-Data:", error?.response?.data || error.message);
