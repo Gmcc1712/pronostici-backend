@@ -8,7 +8,7 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 const FOOTBALL_DATA_KEY = process.env.FOOTBALL_DATA_KEY;
 
-// Cache per le classifiche (evita troppe chiamate API)
+// Cache per le classifiche
 let standingsCache = {};
 const CACHE_DURATION = 3600000; // 1 ora
 
@@ -17,17 +17,12 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-// Funzione per ottenere le date di inizio e fine mese corrente
-function getCurrentMonthRange() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-
-  const pad = n => n.toString().padStart(2, '0');
-  const start = `${year}-${pad(month)}-01`;
-  const endDay = new Date(year, month, 0).getDate();
-  const end = `${year}-${pad(month)}-${pad(endDay)}`;
-
+// Funzione per ottenere range futuro (da oggi + 30 giorni)
+function getFutureRange() {
+  const today = new Date();
+  const start = formatDate(today);
+  const futureDate = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const end = formatDate(futureDate);
   return { start, end };
 }
 
@@ -59,7 +54,6 @@ async function getStandings(competitionId) {
   const cacheKey = `standings_${competitionId}`;
   const now = Date.now();
   
-  // Controlla cache
   if (standingsCache[cacheKey] && (now - standingsCache[cacheKey].timestamp) < CACHE_DURATION) {
     return standingsCache[cacheKey].data;
   }
@@ -71,7 +65,6 @@ async function getStandings(competitionId) {
     
     const standings = response.data.standings[0]?.table || [];
     
-    // Salva in cache
     standingsCache[cacheKey] = {
       data: standings,
       timestamp: now
@@ -86,9 +79,9 @@ async function getStandings(competitionId) {
 
 // CALCOLA FORZA SQUADRA BASATA SU DATI REALI
 function calculateTeamStrength(teamStats) {
-  if (!teamStats) return { strength: 5.0, form: 5.0, homeAdvantage: 1.0 };
+  if (!teamStats) return { strength: 5.0, form: 5.0, homeAdvantage: 1.0, stats: {} };
   
-  const totalTeams = 20; // Assumiamo leghe a 20 squadre (media)
+  const totalTeams = 20;
   const position = teamStats.position;
   const points = teamStats.points;
   const goalDifference = teamStats.goalDifference;
@@ -99,22 +92,13 @@ function calculateTeamStrength(teamStats) {
   const losses = teamStats.lost;
   const gamesPlayed = wins + draws + losses;
   
-  // Calcola forza basata su posizione (10 = primo, 1 = ultimo)
   const positionStrength = Math.max(1, 10 - ((position - 1) / (totalTeams - 1)) * 9);
-  
-  // Calcola forma basata su punti per partita
   const pointsPerGame = gamesPlayed > 0 ? points / gamesPlayed : 1;
-  const formStrength = Math.min(10, Math.max(1, pointsPerGame * 3.33)); // 3 punti = 10, 0 punti = 1
-  
-  // Calcola efficacia offensiva e difensiva
+  const formStrength = Math.min(10, Math.max(1, pointsPerGame * 3.33));
   const avgGoalsFor = gamesPlayed > 0 ? goalsFor / gamesPlayed : 1;
   const avgGoalsAgainst = gamesPlayed > 0 ? goalsAgainst / gamesPlayed : 1;
-  
-  // Bonus/malus per differenza reti
   const goalDiffBonus = Math.max(-2, Math.min(2, goalDifference / 10));
-  
-  // Calcola vantaggio casa basato su posizione (squadre forti hanno più vantaggio casa)
-  const homeAdvantage = 1.0 + (positionStrength / 50); // Da 1.02 a 1.2
+  const homeAdvantage = 1.0 + (positionStrength / 50);
   
   const finalStrength = Math.min(10, Math.max(1, positionStrength + goalDiffBonus));
   const finalForm = Math.min(10, Math.max(1, formStrength));
@@ -123,12 +107,10 @@ function calculateTeamStrength(teamStats) {
     strength: Math.round(finalStrength * 10) / 10,
     form: Math.round(finalForm * 10) / 10,
     homeAdvantage: Math.round(homeAdvantage * 100) / 100,
+    avgGoalsFor: Math.round(avgGoalsFor * 100) / 100,
+    avgGoalsAgainst: Math.round(avgGoalsAgainst * 100) / 100,
     stats: {
-      position,
-      points,
-      goalDifference,
-      goalsFor,
-      goalsAgainst,
+      position, points, goalDifference, goalsFor, goalsAgainst,
       pointsPerGame: Math.round(pointsPerGame * 100) / 100
     }
   };
@@ -147,126 +129,78 @@ async function getTeamData(teamName, competitionId) {
     return calculateTeamStrength(teamStats);
   } catch (error) {
     console.error(`Errore recupero dati per ${teamName}:`, error.message);
-    // Fallback con valori default
-    return { strength: 5.0, form: 5.0, homeAdvantage: 1.0 };
+    return { 
+      strength: 5.0, form: 5.0, homeAdvantage: 1.0, 
+      avgGoalsFor: 1.5, avgGoalsAgainst: 1.5, stats: {} 
+    };
   }
 }
 
-// ALGORITMO AI CON DATI REALI
-async function generaPronosticoIntelligente(match) {
+// ALGORITMO AI SUPER-AVANZATO CON TUTTI I MERCATI
+async function generaPronosticoSuperIntelligente(match) {
   const homeTeam = match.homeTeam.name;
   const awayTeam = match.awayTeam.name;
   const competitionId = match.competition.id;
   
-  // Recupera dati reali delle squadre
   const homeData = await getTeamData(homeTeam, competitionId);
   const awayData = await getTeamData(awayTeam, competitionId);
   
-  // Calcola forza effettiva
   const homeEffectiveStrength = (homeData.strength + homeData.form) * homeData.homeAdvantage;
   const awayEffectiveStrength = (awayData.strength + awayData.form);
-  
   const strengthDiff = homeEffectiveStrength - awayEffectiveStrength;
   
-  let pronostico = 'X';
-  let confidenza = 50;
-  let reasoning = '';
+  // CALCOLA PROBABILITÀ PER OGNI MERCATO
   
-  // Logica decisionale avanzata con dati reali
+  // 1. MERCATO 1-X-2
+  let prob1, probX, prob2;
   if (strengthDiff > 3.0) {
-    pronostico = '1';
-    confidenza = Math.min(88, 70 + Math.floor(strengthDiff * 6));
-    reasoning = `${homeTeam} domina la classifica (${homeData.stats?.position}° vs ${awayData.stats?.position}°). Vantaggio netto`;
+    prob1 = 75; probX = 18; prob2 = 7;
   } else if (strengthDiff > 2.0) {
-    pronostico = '1';
-    confidenza = Math.min(82, 66 + Math.floor(strengthDiff * 5));
-    reasoning = `${homeTeam} in posizione migliore (${homeData.stats?.position}° vs ${awayData.stats?.position}°). Fattore campo decisivo`;
+    prob1 = 65; probX = 22; prob2 = 13;
   } else if (strengthDiff > 1.0) {
-    pronostico = Math.random() > 0.2 ? '1' : 'X';
-    confidenza = Math.min(75, 62 + Math.floor(strengthDiff * 4));
-    reasoning = `Leggero vantaggio ${homeTeam} secondo classifica. Possibile sorpresa`;
+    prob1 = 55; probX = 28; prob2 = 17;
   } else if (strengthDiff < -3.0) {
-    pronostico = '2';
-    confidenza = Math.min(85, 68 + Math.floor(Math.abs(strengthDiff) * 5));
-    reasoning = `${awayTeam} molto superiore in classifica. Supera lo svantaggio trasferta`;
+    prob1 = 10; probX = 20; prob2 = 70;
   } else if (strengthDiff < -2.0) {
-    pronostico = '2';
-    confidenza = Math.min(78, 64 + Math.floor(Math.abs(strengthDiff) * 4));
-    reasoning = `${awayTeam} in posizione migliore (${awayData.stats?.position}° vs ${homeData.stats?.position}°)`;
+    prob1 = 15; probX = 25; prob2 = 60;
   } else if (strengthDiff < -1.0) {
-    pronostico = Math.random() > 0.25 ? '2' : 'X';
-    confidenza = Math.min(72, 60 + Math.floor(Math.abs(strengthDiff) * 3));
-    reasoning = `${awayTeam} favorita dalla classifica, ma trasferta complicata`;
+    prob1 = 22; probX = 30; prob2 = 48;
   } else {
-    // Partita molto equilibrata
-    const random = Math.random();
-    if (random > 0.5) {
-      pronostico = '1';
-      reasoning = `Squadre vicine in classifica. Fattore campo può decidere`;
-    } else if (random > 0.2) {
-      pronostico = 'X';
-      reasoning = `Posizioni simili in classifica. Pareggio probabile`;
-    } else {
-      pronostico = '2';
-      reasoning = `Match equilibrato secondo le statistiche`;
-    }
-    confidenza = 55 + Math.floor(Math.random() * 12); // 55-66%
+    prob1 = 40; probX = 32; prob2 = 28;
   }
   
-  return {
-    pronostico,
-    confidenza,
-    reasoning,
-    homeTeam,
-    awayTeam,
-    homeStats: homeData.stats,
-    awayStats: awayData.stats,
-    realData: true
-  };
-}
-
-app.get('/api/matches', async (req, res) => {
-  if (!FOOTBALL_DATA_KEY) {
-    return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY" });
-  }
-
-  const { start, end } = getCurrentMonthRange();
-  const dateRanges = splitDateRangeIntoChunks(start, end, 10);
-
-  try {
-    const allMatches = [];
-
-    for (const range of dateRanges) {
-      const url = `https://api.football-data.org/v4/matches?dateFrom=${range.from}&dateTo=${range.to}`;
-      const response = await axios.get(url, {
-        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
-      });
-
-      if (Array.isArray(response.data.matches)) {
-        allMatches.push(...response.data.matches);
-      }
-    }
-
-    // Genera pronostici con dati reali (limitiamo a 10 per evitare troppe chiamate API)
-    const limitedMatches = allMatches.slice(0, 10);
-    const matchesConPronostici = [];
-
-    for (const match of limitedMatches) {
-      const aiPronostico = await generaPronosticoIntelligente(match);
-      matchesConPronostici.push({
-        ...match,
-        aiPronostico
-      });
-    }
-
-    res.json(matchesConPronostici);
-
-  } catch (error) {
-    console.error("Errore chiamata Football-Data:", error?.response?.data || error.message);
-    res.status(500).json({ error: 'Errore nel recupero delle partite' });
-  }
-});
-
-app.listen(PORT, () => {
-  console.log(`Server backend in ascolto sulla porta ${PORT} - AI con dati reali attivata`);
-});
+  // 2. MERCATO DOPPIA CHANCE
+  const prob1X = prob1 + probX;
+  const probX2 = probX + prob2;
+  const prob12 = prob1 + prob2;
+  
+  // 3. MERCATO UNDER/OVER
+  const avgGoalsTotali = homeData.avgGoalsFor + awayData.avgGoalsFor + 
+                        homeData.avgGoalsAgainst + awayData.avgGoalsAgainst;
+  const expectedGoals = avgGoalsTotali / 2;
+  
+  const probOver05 = expectedGoals > 0.8 ? 85 : 70;
+  const probOver15 = expectedGoals > 1.5 ? 75 : 45;
+  const probOver25 = expectedGoals > 2.2 ? 65 : 35;
+  const probOver35 = expectedGoals > 3.0 ? 55 : 25;
+  
+  // 4. MERCATO GOAL/NO GOAL
+  const probGoal = (homeData.avgGoalsFor > 1.2 && awayData.avgGoalsFor > 1.0) ? 75 : 50;
+  const probNoGoal = 100 - probGoal;
+  
+  // CREA LISTA DI TUTTI I PRONOSTICI CON PROBABILITÀ
+  const tuttiPronostici = [
+    { tipo: '1 (Vittoria Casa)', codice: '1', probabilita: prob1, mercato: '1X2' },
+    { tipo: 'X (Pareggio)', codice: 'X', probabilita: probX, mercato: '1X2' },
+    { tipo: '2 (Vittoria Trasferta)', codice: '2', probabilita: prob2, mercato: '1X2' },
+    { tipo: '1X (Casa o Pareggio)', codice: '1X', probabilita: prob1X, mercato: 'Doppia Chance' },
+    { tipo: 'X2 (Pareggio o Trasferta)', codice: 'X2', probabilita: probX2, mercato: 'Doppia Chance' },
+    { tipo: '12 (Casa o Trasferta)', codice: '12', probabilita: prob12, mercato: 'Doppia Chance' },
+    { tipo: 'Over 0.5 Gol', codice: 'O0.5', probabilita: probOver05, mercato: 'Under/Over' },
+    { tipo: 'Under 0.5 Gol', codice: 'U0.5', probabilita: 100 - probOver05, mercato: 'Under/Over' },
+    { tipo: 'Over 1.5 Gol', codice: 'O1.5', probabilita: probOver15, mercato: 'Under/Over' },
+    { tipo: 'Under 1.5 Gol', codice: 'U1.5', probabilita: 100 - probOver15, mercato: 'Under/Over' },
+    { tipo: 'Over 2.5 Gol', codice: 'O2.5', probabilita: probOver25, mercato: 'Under/Over' },
+    { tipo: 'Under 2.5 Gol', codice: 'U2.5', probabilita: 100 - probOver25, mercato: 'Under/Over' },
+    { tipo: 'Over 3.5 Gol', codice: 'O3.5', probabilita: probOver35, mercato: 'Under/Over' },
+    { tipo: 'Under 3.5 Gol',
