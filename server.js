@@ -17,40 +17,48 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
-// Funzione per ottenere range futuro (da oggi + 30 giorni)
-function getFutureRange() {
-  const today = new Date();
-  today.setDate(today.getDate() + 1); // Partite di domani in avanti
-  const start = formatDate(today);
+// NUOVA FUNZIONE: Partite per data specifica o oggi di default
+async function getMatchesByDate(targetDate = null) {
+  // Se non specificata, usa oggi
+  const dateToUse = targetDate ? new Date(targetDate) : new Date();
+  const start = formatDate(dateToUse);
+  const end = formatDate(dateToUse);
   
-  const futureDate = new Date(today.getTime() + 30 * 24 * 60 * 60 * 1000);
-  const end = formatDate(futureDate);
+  console.log(`🗓️ Cercando partite per: ${start}`);
   
-  console.log(`🗓️ Cercando partite dal ${start} al ${end}`);
-  return { start, end };
-}
-
-// Funzione per suddividere il range in chunk di massimo 10 giorni
-function splitDateRangeIntoChunks(startDateStr, endDateStr, maxChunkDays = 10) {
-  const chunks = [];
-  let currentStart = new Date(startDateStr);
-  const endDate = new Date(endDateStr);
-
-  while (currentStart <= endDate) {
-    let currentEnd = new Date(currentStart);
-    currentEnd.setDate(currentEnd.getDate() + maxChunkDays - 1);
-    if (currentEnd > endDate) currentEnd = endDate;
-
-    chunks.push({
-      from: formatDate(currentStart),
-      to: formatDate(currentEnd),
+  try {
+    const response = await axios.get(`https://api.football-data.org/v4/matches?dateFrom=${start}&dateTo=${end}`, {
+      headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
     });
-
-    currentStart = new Date(currentEnd);
-    currentStart.setDate(currentStart.getDate() + 1);
+    
+    const matches = response.data.matches || [];
+    console.log(`✅ Trovate ${matches.length} partite per ${start}`);
+    
+    // Se la data specifica è vuota, non provare domani (l'utente ha scelto quella data)
+    if (matches.length === 0 && !targetDate) {
+      // Solo se è "oggi" automatico, prova domani
+      const tomorrow = new Date(dateToUse.getTime() + 24 * 60 * 60 * 1000);
+      const tomorrowStart = formatDate(tomorrow);
+      const tomorrowEnd = formatDate(tomorrow);
+      
+      console.log(`🗓️ Oggi vuoto, cercando partite di domani: ${tomorrowStart}`);
+      
+      const tomorrowResponse = await axios.get(`https://api.football-data.org/v4/matches?dateFrom=${tomorrowStart}&dateTo=${tomorrowEnd}`, {
+        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
+      });
+      
+      const tomorrowMatches = tomorrowResponse.data.matches || [];
+      console.log(`✅ Trovate ${tomorrowMatches.length} partite domani`);
+      
+      return tomorrowMatches;
+    }
+    
+    return matches;
+    
+  } catch (error) {
+    console.error("Errore recupero partite per data:", error.message);
+    return [];
   }
-
-  return chunks;
 }
 
 // DATABASE SQUADRE ESTESO CON VALORI REALISTICI
@@ -98,11 +106,9 @@ const teamStrengthDatabase = {
 
 // FUNZIONE PER OTTENERE DATI SQUADRA (con fallback intelligente)
 function getTeamData(teamName) {
-  // Cerca nel database
   let teamData = teamStrengthDatabase[teamName];
   
   if (!teamData) {
-    // Cerca con nomi parziali
     const searchName = teamName.toLowerCase();
     for (const [dbName, data] of Object.entries(teamStrengthDatabase)) {
       if (dbName.toLowerCase().includes(searchName.split(' ')[0].toLowerCase()) ||
@@ -114,9 +120,8 @@ function getTeamData(teamName) {
     }
   }
   
-  // Se ancora non trovata, usa valori casuali realistici
   if (!teamData) {
-    const randomStrength = 5.0 + Math.random() * 4.0; // Da 5.0 a 9.0
+    const randomStrength = 5.0 + Math.random() * 4.0;
     teamData = {
       strength: Math.round(randomStrength * 10) / 10,
       form: Math.round((5.0 + Math.random() * 4.0) * 10) / 10,
@@ -139,59 +144,53 @@ function generaPronosticoVariegato(match, matchIndex) {
   const homeData = getTeamData(homeTeam);
   const awayData = getTeamData(awayTeam);
   
-  // Calcola forze effettive con vantaggio casa
-  const homeAdvantage = 1.15; // 15% vantaggio casa
+  const homeAdvantage = 1.15;
   const homeScore = (homeData.strength + homeData.form) * homeAdvantage;
   const awayScore = awayData.strength + awayData.form;
   const strengthDiff = homeScore - awayScore;
   
-  // Calcola probabilità base per 1-X-2
   let prob1, probX, prob2;
   
   if (strengthDiff > 3.5) {
-    prob1 = 70 + Math.random() * 15; // 70-85%
-    prob2 = 5 + Math.random() * 10;  // 5-15%
+    prob1 = 70 + Math.random() * 15;
+    prob2 = 5 + Math.random() * 10;
     probX = 100 - prob1 - prob2;
   } else if (strengthDiff > 2.0) {
-    prob1 = 55 + Math.random() * 15; // 55-70%
-    prob2 = 10 + Math.random() * 15; // 10-25%
+    prob1 = 55 + Math.random() * 15;
+    prob2 = 10 + Math.random() * 15;
     probX = 100 - prob1 - prob2;
   } else if (strengthDiff > 0.5) {
-    prob1 = 40 + Math.random() * 15; // 40-55%
-    prob2 = 20 + Math.random() * 15; // 20-35%
+    prob1 = 40 + Math.random() * 15;
+    prob2 = 20 + Math.random() * 15;
     probX = 100 - prob1 - prob2;
   } else if (strengthDiff < -3.5) {
-    prob2 = 70 + Math.random() * 15; // 70-85%
-    prob1 = 5 + Math.random() * 10;  // 5-15%
+    prob2 = 70 + Math.random() * 15;
+    prob1 = 5 + Math.random() * 10;
     probX = 100 - prob1 - prob2;
   } else if (strengthDiff < -2.0) {
-    prob2 = 55 + Math.random() * 15; // 55-70%
-    prob1 = 10 + Math.random() * 15; // 10-25%
+    prob2 = 55 + Math.random() * 15;
+    prob1 = 10 + Math.random() * 15;
     probX = 100 - prob1 - prob2;
   } else if (strengthDiff < -0.5) {
-    prob2 = 40 + Math.random() * 15; // 40-55%
-    prob1 = 20 + Math.random() * 15; // 20-35%
+    prob2 = 40 + Math.random() * 15;
+    prob1 = 20 + Math.random() * 15;
     probX = 100 - prob1 - prob2;
   } else {
-    // Partita equilibrata - più casualità
-    prob1 = 30 + Math.random() * 20; // 30-50%
-    prob2 = 25 + Math.random() * 20; // 25-45%
+    prob1 = 30 + Math.random() * 20;
+    prob2 = 25 + Math.random() * 20;
     probX = 100 - prob1 - prob2;
   }
   
-  // Arrotonda le probabilità
   prob1 = Math.round(prob1);
   prob2 = Math.round(prob2);
   probX = Math.round(probX);
   
-  // CALCOLA ALTRI MERCATI
   const prob1X = prob1 + probX;
   const probX2 = probX + prob2;
   const prob12 = prob1 + prob2;
   
-  // Under/Over basato su attacchi
   const avgGoals = (homeData.attack + awayData.attack) / 2;
-  const goalVariation = Math.random() * 0.8 + 0.6; // 0.6-1.4
+  const goalVariation = Math.random() * 0.8 + 0.6;
   const expectedGoals = avgGoals * goalVariation;
   
   const probOver05 = expectedGoals > 1.0 ? 80 + Math.random() * 15 : 60 + Math.random() * 20;
@@ -199,11 +198,9 @@ function generaPronosticoVariegato(match, matchIndex) {
   const probOver25 = expectedGoals > 2.5 ? 60 + Math.random() * 15 : 25 + Math.random() * 20;
   const probOver35 = expectedGoals > 3.2 ? 50 + Math.random() * 15 : 15 + Math.random() * 15;
   
-  // Goal/No Goal
   const bothAttack = (homeData.attack + awayData.attack) / 2;
   const probGoal = bothAttack > 7.0 ? 70 + Math.random() * 15 : 45 + Math.random() * 25;
   
-  // TUTTI I PRONOSTICI
   const tuttiPronostici = [
     { tipo: '1 (Vittoria Casa)', codice: '1', probabilita: Math.round(prob1), mercato: '1X2' },
     { tipo: 'X (Pareggio)', codice: 'X', probabilita: Math.round(probX), mercato: '1X2' },
@@ -223,12 +220,10 @@ function generaPronosticoVariegato(match, matchIndex) {
     { tipo: 'No Goal (Non Entrambe)', codice: 'NG', probabilita: Math.round(100 - probGoal), mercato: 'Goal/No Goal' }
   ];
   
-  // TROVA MIGLIOR PRONOSTICO
   const pronosticoMigliore = tuttiPronostici.reduce((max, current) => 
     current.probabilita > max.probabilita ? current : max
   );
   
-  // REASONING PERSONALIZZATO
   let reasoning = '';
   if (strengthDiff > 2.0) {
     reasoning = `${homeTeam} molto più forte (${homeData.strength}/10 vs ${awayData.strength}/10). Vantaggio casa decisivo`;
@@ -255,36 +250,32 @@ function generaPronosticoVariegato(match, matchIndex) {
   };
 }
 
+// ENDPOINT PRINCIPALE CON SELEZIONE DATA
 app.get('/api/matches', async (req, res) => {
   if (!FOOTBALL_DATA_KEY) {
     return res.status(500).json({ error: "Manca la variabile d'ambiente FOOTBALL_DATA_KEY" });
   }
 
-  const { start, end } = getFutureRange();
-  const dateRanges = splitDateRangeIntoChunks(start, end, 10);
-
   try {
-    const allMatches = [];
-
-    for (const range of dateRanges) {
-      const url = `https://api.football-data.org/v4/matches?dateFrom=${range.from}&dateTo=${range.to}`;
-      const response = await axios.get(url, {
-        headers: { 'X-Auth-Token': FOOTBALL_DATA_KEY }
-      });
-
-      if (Array.isArray(response.data.matches)) {
-        allMatches.push(...response.data.matches);
-      }
+    // Legge il parametro ?date=YYYY-MM-DD dalla query string
+    const selectedDate = req.query.date;
+    
+    if (selectedDate) {
+      console.log(`📅 Utente ha selezionato: ${selectedDate}`);
+    } else {
+      console.log(`📅 Nessuna data specificata, uso oggi`);
     }
+    
+    // Recupera partite per la data specifica o oggi
+    const allMatches = await getMatchesByDate(selectedDate);
 
-    // Limita a 12 partite (aumentato da 8) e genera pronostici variati
-    const limitedMatches = allMatches.slice(0, 12);
-    const matchesConPronostici = limitedMatches.map((match, index) => ({
+    // Genera pronostici per tutte le partite del giorno
+    const matchesConPronostici = allMatches.map((match, index) => ({
       ...match,
       aiPronostico: generaPronosticoVariegato(match, index)
     }));
 
-    console.log(`✅ Invio ${matchesConPronostici.length} partite con pronostici VARIATI`);
+    console.log(`✅ Invio ${matchesConPronostici.length} partite per la data richiesta`);
     res.json(matchesConPronostici);
 
   } catch (error) {
@@ -294,7 +285,7 @@ app.get('/api/matches', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🤖 Server AI CON VARIETÀ GARANTITA in ascolto sulla porta ${PORT}`);
-  console.log(`🎯 Ogni partita avrà pronostici DIVERSI e realistici`);
-  console.log(`📊 Database: ${Object.keys(teamStrengthDatabase).length} squadre top + generazione casuale per altre`);
+  console.log(`📅 Server AI CON SELEZIONE DATA in ascolto sulla porta ${PORT}`);
+  console.log(`🎯 Usa ?date=YYYY-MM-DD per scegliere il giorno`);
+  console.log(`🔄 Default: partite di oggi`);
 });
